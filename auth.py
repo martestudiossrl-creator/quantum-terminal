@@ -9,15 +9,23 @@ from firebase_admin import credentials, auth, firestore
 import json
 from datetime import datetime
 import requests
+import extra_streamlit_components as stx
+from google.oauth2 import id_token as google_id_token_verifier
+from google.auth.transport import requests as google_requests
+
+def get_cookie_manager():
+    return stx.CookieManager(key="quantum_auth_v11_manager")
+
+def get_auth_handler():
+    # Helper to clean up code, but essentially just a wrapper now
+    return FirebaseAuth()
 
 class FirebaseAuth:
-    """Firebase Authentication Handler"""
+    """Firebase Authentication Handler with Persistent Sessions"""
     
     def __init__(self):
-        """Initialize Firebase if not already initialized"""
+        """Initialize Firebase and Cookie Manager"""
         if not firebase_admin._apps:
-            # Load credentials from Streamlit secrets in production
-            # For local testing, use service account JSON
             try:
                 # Try to load from Streamlit secrets (production)
                 cred_dict = dict(st.secrets["firebase"])
@@ -34,10 +42,44 @@ class FirebaseAuth:
         
         self.db = firestore.client()
         self.api_key = st.secrets.get("firebase_api_key", "")
+        # Get the global cookie manager
+        self.cookie_manager = get_cookie_manager()
+
+    def _log(self, msg):
+        """Internal logging helper for debugging authentication flows"""
+        # In production, we can write to a specific log file or just pass
+        # Streamlit Cloud logs stdout/stderr automatically
+        print(f"[AUTH] {msg}") 
+        try:
+            from datetime import datetime as _dt
+            with open("auth_info.log", "a") as f:
+                f.write(f"{_dt.now()} - {msg}\n")
+        except:
+            pass
     
+    def get_token_from_cookie(self):
+        """Get auth token from cookies for persistence"""
+        return self.cookie_manager.get(cookie="quantum_auth_token")
+
+    def set_token_cookie(self, token, expires_at=30):
+        """Set auth token in cookies (default 30 days)"""
+        self.cookie_manager.set("quantum_auth_token", token, expires_at=datetime.now().timestamp() + (expires_at * 24 * 60 * 60))
+
+    def delete_token_cookie(self):
+        """Remove auth token from cookies"""
+        try:
+            # Set to empty with immediate expiration (more reliable than delete)
+            self.cookie_manager.set("quantum_auth_token", "", expires_at=datetime.now().timestamp())
+        except:
+            pass
+        try:
+            self.cookie_manager.delete("quantum_auth_token")
+        except:
+            pass
+
     def sign_up_email_password(self, email, password, username):
         """
-        Register new user with email/password
+        Register new user and trigger verification email via REST API
         Returns: (success: bool, message: str, user_id: str)
         """
         try:
@@ -49,8 +91,30 @@ class FirebaseAuth:
                 email_verified=False
             )
             
-            # Send email verification
-            link = auth.generate_email_verification_link(email)
+            # TRIGGER REAL EMAIL VERIFICATION via REST API
+            try:
+                # 1. Sign in internally to get ID token (required for verification request)
+                url_signin = f"https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key={self.api_key}"
+                payload_signin = {"email": email, "password": password, "returnSecureToken": True}
+                res_signin = requests.post(url_signin, json=payload_signin)
+                
+                if res_signin.status_code == 200:
+                    id_token = res_signin.json().get('idToken')
+                    # 2. Request verification email
+                    url_email = f"https://identitytoolkit.googleapis.com/v1/accounts:sendOobCode?key={self.api_key}"
+                    payload_email = {"requestType": "VERIFY_EMAIL", "idToken": id_token}
+                    res_email = requests.post(url_email, json=payload_email)
+                    
+                    if res_email.status_code == 200:
+                        email_sent_msg = "✅ Account created! Check your email (including Spam) for the verification link."
+                    else:
+                        link = auth.generate_email_verification_link(email)
+                        email_sent_msg = f"✅ Account created! A verification link has been generated.<br><br>👉 **[CLICK HERE TO VERIFY EMAIL]({link})**"
+                else:
+                    link = auth.generate_email_verification_link(email)
+                    email_sent_msg = f"✅ Account created! A verification link has been generated.<br><br>👉 **[CLICK HERE TO VERIFY EMAIL]({link})**"
+            except Exception as e:
+                email_sent_msg = "✅ Account created! Please contact admin for verification if you don't receive an email."
             
             # Create user profile in Firestore
             self.db.collection('users').document(user.uid).set({
@@ -62,14 +126,14 @@ class FirebaseAuth:
                 'alerts': []
             })
             
-            return True, f"✅ Account created!<br><br>👉 **[CLICK HERE TO VERIFY EMAIL]({link})**<br><br>(Use this link since we don't have an email server configured yet!)", user.uid
+            return True, email_sent_msg, user.uid
             
         except auth.EmailAlreadyExistsError:
             return False, "❌ Email already registered", None
         except Exception as e:
             return False, f"❌ Registration failed: {str(e)}", None
     
-    def sign_in_email_password(self, email_or_username, password):
+    def sign_in_email_password(self, email_or_username, password, remember_me=False):
         """
         Sign in with email/username and password
         Returns: (success: bool, message: str, user_data: dict)
@@ -85,7 +149,7 @@ class FirebaseAuth:
                     return False, "❌ Username not found", None
                 email = users[0].to_dict()['email']
             
-            # Use Firebase REST API for sign in (Firebase Admin SDK doesn't support this directly)
+            # Use Firebase REST API for sign in
             url = f"https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key={self.api_key}"
             payload = {
                 "email": email,
@@ -97,6 +161,7 @@ class FirebaseAuth:
             
             if response.status_code == 200:
                 data = response.json()
+                id_token = data.get('idToken')
                 user = auth.get_user_by_email(email)
                 
                 # Get user profile from Firestore
@@ -107,6 +172,10 @@ class FirebaseAuth:
                 
                 if not user.email_verified:
                     return False, "⚠️ Please verify your email first. Check your inbox.", None
+                
+                # Persist session if remember_me is True
+                if remember_me:
+                    self.set_token_cookie(id_token)
                 
                 return True, "✅ Login successful!", user_data
             else:
@@ -120,12 +189,27 @@ class FirebaseAuth:
                 
         except Exception as e:
             return False, f"❌ Login error: {str(e)}", None
-    
+
+    def sign_in_with_token(self, token):
+        """Verify an existing ID token from cookie"""
+        try:
+            decoded_token = auth.verify_id_token(token)
+            uid = decoded_token['uid']
+            user = auth.get_user(uid)
+            
+            # Get user profile from Firestore
+            user_doc = self.db.collection('users').document(uid).get()
+            if user_doc.exists:
+                user_data = user_doc.to_dict()
+                user_data['uid'] = uid
+                user_data['email_verified'] = user.email_verified
+                return True, user_data
+            return False, None
+        except:
+            return False, None
+
     def send_password_reset_email(self, email):
-        """
-        Send password reset email
-        Returns: (success: bool, message: str)
-        """
+        """Send password reset email"""
         try:
             link = auth.generate_password_reset_link(email)
             return True, f"✅ Password reset email sent to {email}"
@@ -167,7 +251,7 @@ class FirebaseAuth:
             return []
         except:
             return []
-    
+
     def save_user_alerts(self, user_id, alerts_data):
         """Save user's alerts to Firestore"""
         try:
@@ -188,70 +272,253 @@ class FirebaseAuth:
             return []
         except:
             return []
+    
+    def sign_in_with_google(self, google_token):
+        """
+        Sign in with Google ID Token. 
+        Bypasses the Firebase REST API if the API key is invalid by verifying 
+        the Google Token directly and using Firebase Admin SDK.
+        """
+        try:
+            client_id = st.secrets.get("google_oauth_client_id", "")
+            
+            # 1. Verify Google ID Token locally/via Google Certs (Doesn't need Firebase API Key)
+            self._log("Verifying Google ID Token via google-auth library...")
+            id_info = google_id_token_verifier.verify_oauth2_token(
+                google_token, google_requests.Request(), client_id
+            )
+            
+            if not id_info:
+                return False, "❌ Google token verification failed", None
+            
+            email = id_info.get('email')
+            display_name = id_info.get('name', email.split('@')[0])
+            self._log(f"Google Token Verified for {email}")
+            
+            # 2. Get or create user in Firebase via Admin SDK (Doesn't need API Key)
+            try:
+                user = auth.get_user_by_email(email)
+                self._log(f"Found existing Firebase user: {user.uid}")
+            except auth.UserNotFoundError:
+                self._log(f"Creating new Firebase user for {email}")
+                user = auth.create_user(
+                    email=email,
+                    display_name=display_name,
+                    email_verified=True
+                )
+            
+            # 3. Get or create Firestore profile
+            user_doc = self.db.collection('users').document(user.uid).get()
+            
+            if not user_doc.exists:
+                username = display_name.replace(' ', '_').lower()
+                self.db.collection('users').document(user.uid).set({
+                    'username': username,
+                    'email': email,
+                    'created_at': datetime.now(),
+                    'email_verified': True,
+                    'portfolio': [],
+                    'alerts': [],
+                    'auth_provider': 'google'
+                })
+                user_data = {
+                    'uid': user.uid,
+                    'username': username,
+                    'email': email,
+                    'email_verified': True
+                }
+            else:
+                user_data = user_doc.to_dict()
+                user_data['uid'] = user.uid
+                user_data['email_verified'] = True
+            
+            # 4. Set session state
+            st.session_state.authenticated = True
+            st.session_state.user = user_data
+            st.session_state.user_id = user_data['uid']
+            st.session_state.username = user_data['username']
+            
+            # 5. Handle Persistent Cookie
+            # Note: We can't get a Firebase ID Token without a valid API Key.
+            # We'll use the Google ID Token as a session token if possible,
+            # but for simplicity, we'll just set a placeholder or use the custom token if we really need persistence.
+            # For now, we'll use the google_token as the session identifier.
+            
+            # We try to get a Firebase ID Token JUST IN CASE the key actually works for this 
+            # (sometimes identitytoolkit works while createAuthUri fails)
+            firebase_token = None
+            try:
+                url = f"https://identitytoolkit.googleapis.com/v1/accounts:signInWithIdp?key={self.api_key}"
+                redirect_uri = st.secrets.get("redirect_url", "http://localhost:8501")
+                payload = {
+                    "postBody": f"id_token={google_token}&providerId=google.com",
+                    "requestUri": redirect_uri,
+                    "returnSecureToken": True
+                }
+                fb_res = requests.post(url, json=payload)
+                if fb_res.status_code == 200:
+                    firebase_token = fb_res.json().get('idToken')
+            except:
+                pass
+                
+            if firebase_token:
+                self.set_token_cookie(firebase_token)
+            else:
+                self._log("Firebase persistent token couldn't be generated (API key issue). Using session only.")
+            
+            return True, "✅ Google Sign-In successful!", user_data
+                
+        except Exception as e:
+            self._log(f"sign_in_with_google EXCEPTION: {str(e)}")
+            return False, f"❌ Google Sign-In error: {str(e)}", None
 
 
-def show_login_page():
-    """Display beautiful login/signup page"""
+
+def show_login_page(auth_handler):
+    """Display beautiful mobile-first login/signup page"""
+    h = auth_handler
     
     st.markdown("""
     <style>
     .auth-container {
-        max-width: 500px;
-        margin: 50px auto;
-        padding: 40px;
-        background: linear-gradient(135deg, rgba(0, 242, 255, 0.1), rgba(123, 47, 247, 0.1));
-        border: 2px solid rgba(0, 242, 255, 0.3);
-        border-radius: 20px;
-        box-shadow: 0 8px 32px rgba(0, 242, 255, 0.2);
+        max-width: 450px;
+        margin: 20px auto;
+        padding: 30px;
+        background: rgba(10, 14, 39, 0.8);
+        border: 1px solid rgba(0, 242, 255, 0.3);
+        border-radius: 24px;
+        backdrop-filter: blur(20px);
+        box-shadow: 0 15px 35px rgba(0, 0, 0, 0.5), 0 0 20px rgba(0, 242, 255, 0.1);
     }
     .auth-title {
         text-align: center;
-        font-size: 2.5rem;
+        font-size: 2.2rem;
         background: linear-gradient(90deg, #00f2ff 0%, #7b2ff7 100%);
         -webkit-background-clip: text;
         -webkit-text-fill-color: transparent;
+        margin-bottom: 5px;
+        font-weight: 800;
+    }
+    .auth-subtitle {
+        text-align: center;
+        color: #9aa0a6;
+        font-size: 0.9rem;
         margin-bottom: 30px;
+        letter-spacing: 1px;
+    }
+    .google-btn {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: white;
+        color: #444;
+        border-radius: 12px;
+        padding: 10px;
+        font-weight: 600;
+        cursor: pointer;
+        margin-bottom: 20px;
+        border: 1px solid #ddd;
+        transition: all 0.3s;
+    }
+    .google-btn:hover {
+        background: #f1f1f1;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.1);
     }
     </style>
     """, unsafe_allow_html=True)
     
-    col1, col2, col3 = st.columns([1, 2, 1])
+    # Check for existing session
+    token = h.get_token_from_cookie()
+    
+    if token and 'authenticated' not in st.session_state:
+        success, user_data = h.sign_in_with_token(token)
+        if success:
+            st.session_state.authenticated = True
+            st.session_state.user = user_data
+            st.session_state.user_id = user_data['uid']
+            st.session_state.username = user_data['username']
+            st.rerun()
+
+    # Google OAuth Login
+    st.markdown("---")
+    
+    # Show OAuth error if one occurred during callback
+    if st.session_state.get("_oauth_error"):
+        st.error(st.session_state._oauth_error)
+        del st.session_state._oauth_error
+    
+    import os
+    import requests
+    client_id = st.secrets.get("google_oauth_client_id", os.getenv("GOOGLE_OAUTH_CLIENT_ID", ""))
+    client_secret = st.secrets.get("google_oauth_client_secret", os.getenv("GOOGLE_OAUTH_CLIENT_SECRET", ""))
+    
+    
+    # OAuth callback is handled in app.py, not here
+    
+    if client_id:
+        # Build Google OAuth URL
+        redirect_uri = st.secrets.get("redirect_url", "http://localhost:8501")
+        scope = "openid email profile"
+        auth_url = f"https://accounts.google.com/o/oauth2/auth?client_id={client_id}&redirect_uri={redirect_uri}&scope={scope}&response_type=code&access_type=offline&prompt=select_account"
+        
+        # Show button with link
+        st.markdown(f"""
+        <a href="{auth_url}" target="_self">
+            <button style="
+                width: 100%;
+                padding: 12px;
+                background: white;
+                color: #444;
+                border: 1px solid #ddd;
+                border-radius: 4px;
+                font-size: 16px;
+                cursor: pointer;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                gap: 10px;
+            ">
+                <img src="https://www.google.com/favicon.ico" width="20" height="20">
+                Sign in with Google
+            </button>
+        </a>
+        """, unsafe_allow_html=True)
+    else:
+        st.button("🔴 Sign in with Google", disabled=True, key="google_disabled", use_container_width=True)
+        st.caption("⚙️ Google OAuth not configured")
+    
+    st.markdown("---")
+
+    col1, col2, col3 = st.columns([1, 4, 1])
     
     with col2:
         st.markdown('<div class="auth-container">', unsafe_allow_html=True)
-        st.markdown('<h1 class="auth-title">💠 QUANTUM TERMINAL</h1>', unsafe_allow_html=True)
+        st.markdown('<h1 class="auth-title">QUANTUM</h1>', unsafe_allow_html=True)
+        st.markdown('<p class="auth-subtitle">NEXT-GEN FINANCIAL TERMINAL</p>', unsafe_allow_html=True)
+        
+
+
+
+
+        
+        st.markdown("<p style='text-align:center; color:#555;'>— or use email —</p>", unsafe_allow_html=True)
         
         # Tabs for Login/Signup
-        auth_tab = st.radio("", ["🔑 Login", "📝 Sign Up"], horizontal=True, label_visibility="collapsed")
+        mode = st.tabs(["🔑 LOGIN", "📝 SIGN UP"])
         
-        st.markdown("---")
-        
-        auth_handler = FirebaseAuth()
-        
-        if auth_tab == "🔑 Login":
-            # LOGIN FORM
-            st.subheader("🔑 Login")
-            
-            with st.form("login_form"):
-                login_input = st.text_input("📧 Email or Username", placeholder="your@email.com or username")
-                password = st.text_input("🔒 Password", type="password")
+        with mode[0]:
+            with st.form("login_form", clear_on_submit=False):
+                login_input = st.text_input("Email or Username")
+                password = st.text_input("Password", type="password")
+                remember_me = st.checkbox("Remember me", value=True)
                 
-                col_login, col_forgot = st.columns(2)
-                
-                with col_login:
-                    login_btn = st.form_submit_button("🚀 LOGIN", use_container_width=True)
-                
-                with col_forgot:
-                    forgot_btn = st.form_submit_button("🔄 Forgot Password?", use_container_width=True)
+                login_btn = st.form_submit_button("ENTER TERMINAL", use_container_width=True)
                 
                 if login_btn:
                     if login_input and password:
-                        with st.spinner("Checking credentials..."):
-                            success, message, user_data = auth_handler.sign_in_email_password(login_input, password)
-                            
+                        with st.spinner("Authenticating..."):
+                            success, message, user_data = h.sign_in_email_password(login_input, password, remember_me)
                             if success:
-                                st.success(message)
-                                # Save to session state
                                 st.session_state.authenticated = True
                                 st.session_state.user = user_data
                                 st.session_state.user_id = user_data['uid']
@@ -260,66 +527,40 @@ def show_login_page():
                             else:
                                 st.error(message)
                     else:
-                        st.warning("⚠️ Please fill all fields")
-                
-                if forgot_btn:
-                    if '@' in login_input:
-                        success, message = auth_handler.send_password_reset_email(login_input)
-                        if success:
-                            st.success(message)
-                        else:
-                            st.error(message)
-                    else:
-                        st.warning("⚠️ Please enter your email address")
-        
-        else:
-            # SIGNUP FORM
-            st.subheader("📝 Create Account")
+                        st.warning("Please fill all fields")
             
+            if st.button("Forgot Password?"):
+                st.info("Feature coming soon. Reset via Firebase Console for now.")
+
+        with mode[1]:
             with st.form("signup_form"):
-                username = st.text_input("👤 Username", placeholder="Choose a username")
-                email = st.text_input("📧 Email", placeholder="your@email.com")
-                email_confirm = st.text_input("📧 Confirm Email", placeholder="Repeat email")
-                password = st.text_input("🔒 Password", type="password", placeholder="Min 6 characters")
-                password_confirm = st.text_input("🔒 Confirm Password", type="password", placeholder="Repeat password")
+                new_username = st.text_input("Display Name")
+                new_email = st.text_input("Email Address")
+                new_password = st.text_input("Password (min 6 chars)", type="password")
                 
-                signup_btn = st.form_submit_button("✨ CREATE ACCOUNT", use_container_width=True)
+                signup_btn = st.form_submit_button("CREATE ACCOUNT", use_container_width=True)
                 
                 if signup_btn:
-                    # Validation
-                    if not all([username, email, email_confirm, password, password_confirm]):
-                        st.error("❌ Please fill all fields")
-                    elif email != email_confirm:
-                        st.error("❌ Emails don't match")
-                    elif password != password_confirm:
-                        st.error("❌ Passwords don't match")
-                    elif len(password) < 6:
-                        st.error("❌ Password must be at least 6 characters")
-                    elif '@' not in email:
-                        st.error("❌ Invalid email format")
+                    if not all([new_username, new_email, new_password]):
+                        st.error("Please fill all fields")
+                    elif len(new_password) < 6:
+                        st.error("Password too short")
                     else:
-                        with st.spinner("Creating account..."):
-                            success, message, user_id = auth_handler.sign_up_email_password(email, password, username)
-                            
+                        with st.spinner("Registering..."):
+                            success, message, _ = h.sign_up_email_password(new_email, new_password, new_username)
                             if success:
-                                st.markdown(f"""
-                                <div style="padding: 20px; background-color: rgba(0, 255, 0, 0.1); border-left: 5px solid #00ff00; border-radius: 5px;">
-                                    {message}
-                                </div>
-                                """, unsafe_allow_html=True)
+                                st.markdown(f"<div style='background:rgba(0,255,100,0.1); padding:15px; border-radius:10px; border:1px solid #0f0;'>{message}</div>", unsafe_allow_html=True)
                             else:
                                 st.error(message)
         
         st.markdown('</div>', unsafe_allow_html=True)
-        
-        # Google OAuth Button (placeholder - requires additional setup)
-        st.markdown("---")
-        st.info("🔜 Google Sign-In coming soon! Use email registration for now.")
 
 
-def logout():
-    """Logout user"""
-    for key in ['authenticated', 'user', 'user_id', 'username']:
+def logout(auth_handler):
+    """Logout user and clear cookies"""
+    # auth_handler passed as argument to avoid re-instantiation
+    auth_handler.delete_token_cookie()
+    for key in ['authenticated', 'user', 'user_id', 'username', 'user_loaded']:
         if key in st.session_state:
             del st.session_state[key]
     st.rerun()

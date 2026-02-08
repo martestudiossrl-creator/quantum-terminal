@@ -20,17 +20,121 @@ import auth
 st.set_page_config(page_title="QUANTUM TERMINAL V11 PRO", layout="wide", page_icon="💠")
 
 # AUTHENTICATION CHECK
+auth_handler = auth.get_auth_handler()
 if 'authenticated' not in st.session_state:
     st.session_state.authenticated = False
 
+# Handle Google OAuth callback FIRST (before any other auth checks)
+import os
+import requests as req_lib
+from datetime import datetime as _dt
+query_params = dict(st.query_params)
+
+def _oauth_log(msg):
+    """Write debug info to oauth_debug.log"""
+    try:
+        with open("oauth_debug.log", "a") as f:
+            f.write(f"\n=== {_dt.now()} ===\n{msg}\n")
+    except:
+        pass
+
+if "code" in query_params:
+    # Use the auth code VALUE for dedup — not a session flag that triggers reruns
+    auth_code = query_params["code"]
+    _last_code = st.session_state.get("_last_oauth_code", "")
+    
+    # Check if we are already authenticated (don't process code if we are)
+    if not st.session_state.authenticated and auth_code != _last_code:
+        # IMMEDIATELY mark as processed to prevent double-requests if rerun occurs
+        st.session_state._last_oauth_code = auth_code
+        # Clear params immediately so they don't persist on next potential rerun
+        st.query_params.clear()
+        
+        _oauth_log(f"OAuth code received. Processing... (Params cleared)")
+        
+        client_id = st.secrets.get("google_oauth_client_id", os.getenv("GOOGLE_OAUTH_CLIENT_ID", ""))
+        client_secret = st.secrets.get("google_oauth_client_secret", os.getenv("GOOGLE_OAUTH_CLIENT_SECRET", ""))
+        redirect_uri = st.secrets.get("redirect_url", "http://localhost:8501")
+        
+        if client_id and client_secret:
+            try:
+                # Exchange code for tokens
+                token_url = "https://oauth2.googleapis.com/token"
+                token_data = {
+                    "code": auth_code,
+                    "client_id": client_id,
+                    "client_secret": client_secret,
+                    "redirect_uri": redirect_uri,
+                    "grant_type": "authorization_code"
+                }
+                
+                _oauth_log(f"Exchanging code for tokens... redirect_uri={redirect_uri}")
+                token_response = req_lib.post(token_url, data=token_data, timeout=15)
+                _oauth_log(f"Token response status: {token_response.status_code}")
+                
+                if token_response.status_code == 200:
+                    tokens = token_response.json()
+                    id_token = tokens.get("id_token")
+                    _oauth_log(f"Got id_token: {bool(id_token)}")
+                    
+                    if id_token:
+                        # Sign in with Firebase
+                        _oauth_log("Calling sign_in_with_google...")
+                        # NOTE: auth_handler.sign_in_with_google now sets session state internally
+                        # before setting the cookie to handle potential reruns gracefully.
+                        success, message, user_data = auth_handler.sign_in_with_google(id_token)
+                        _oauth_log(f"Firebase result: success={success}, message={message}")
+                        
+                        if success:
+                            _oauth_log(f"SUCCESS! User: {user_data.get('username') if user_data else 'Unknown'}")
+                            st.rerun()
+                        else:
+                            st.session_state._oauth_error = f"🔴 Google Sign-In failed: {message}"
+                            _oauth_log(f"Firebase FAILED: {message}")
+                    else:
+                        st.session_state._oauth_error = "🔴 No ID token received from Google"
+                        _oauth_log("No id_token in token response")
+                else:
+                    resp_text = token_response.text[:500]
+                    _oauth_log(f"Token exchange FAILED (400 often means code expired/used): {resp_text}")
+                    try:
+                        error_detail = token_response.json().get("error_description", resp_text)
+                    except:
+                        error_detail = resp_text
+                    st.session_state._oauth_error = f"🔴 Token exchange failed: {error_detail}"
+            except Exception as e:
+                _oauth_log(f"EXCEPTION: {str(e)}")
+                st.session_state._oauth_error = f"🔴 OAuth error: {str(e)}"
+        else:
+            st.session_state._oauth_error = "🔴 OAuth credentials not configured"
+            _oauth_log("Missing client_id or client_secret!")
+        
+        # After processing (success or fail), rerun to clean up the URL fully
+        st.rerun()
+    elif auth_code == _last_code:
+        # Same code seen again — just clear params silently if they are still there
+        if query_params:
+            _oauth_log("Same code seen again, skipping and clearing params.")
+            st.query_params.clear()
+            st.rerun()
+
+# Check for persistent token if not authenticated
 if not st.session_state.authenticated:
-    auth.show_login_page()
+    token = auth_handler.get_token_from_cookie()
+    if token:
+        success, user_data = auth_handler.sign_in_with_token(token)
+        if success:
+            st.session_state.authenticated = True
+            st.session_state.user = user_data
+            st.session_state.user_id = user_data['uid']
+            st.session_state.username = user_data['username']
+
+if not st.session_state.authenticated:
+    auth.show_login_page(auth_handler)
     st.stop()
 
-# LOAD USER DATA IF JUST LOGGED IN
-if 'portfolio' not in st.session_state or (st.session_state.get('user_loaded') != st.session_state.user_id):
-    auth_handler = auth.FirebaseAuth()
-    
+# LOAD USER DATA
+if st.session_state.get('user_loaded') != st.session_state.user_id:
     # Load Portfolio
     user_portfolio = auth_handler.load_user_portfolio(st.session_state.user_id)
     if user_portfolio:
@@ -184,7 +288,7 @@ if 'chat_history' not in st.session_state:
 # SIDEBAR - ADVANCED ASSET SEARCH & USER PROFILE
 st.sidebar.markdown(f"### 👤 {st.session_state.username}")
 if st.sidebar.button("🚪 LOGOUT", type="secondary"):
-    auth.logout()
+    auth.logout(auth_handler)
 
 st.sidebar.markdown("---")
 st.sidebar.markdown("### 🎯 PORTFOLIO MANAGER")
@@ -228,7 +332,7 @@ with st.sidebar.form("add_form"):
         st.session_state.portfolio = pd.concat([st.session_state.portfolio, new], ignore_index=True)
         
         # SAVE TO FIRESTORE
-        auth_handler = auth.FirebaseAuth()
+        # auth_handler is available from top-level scope
         portfolio_dict = st.session_state.portfolio.to_dict('records')
         auth_handler.save_user_portfolio(st.session_state.user_id, portfolio_dict)
         
@@ -247,7 +351,7 @@ if not st.session_state.portfolio.empty:
             ~st.session_state.portfolio['Ticker'].isin(remove)]
             
         # SAVE TO FIRESTORE
-        auth_handler = auth.FirebaseAuth()
+        # auth_handler is available from top-level scope
         portfolio_dict = st.session_state.portfolio.to_dict('records')
         auth_handler.save_user_portfolio(st.session_state.user_id, portfolio_dict)
         
@@ -857,13 +961,13 @@ def calculate_smartquant_score(ticker, series, info, asset_type):
 
 
 # TABS
-tab1, tab2, tab3, tab4, tab5 = st.tabs([
-    "� PORTFOLIO OVERVIEW", "🧬 OPTIMIZATION", "🌍 MACRO", "🔔 ALERTS", "🤖 AI ASSISTANT"
+tab1, tab_tm, tab2, tab3, tab4, tab5 = st.tabs([
+    "📂 PORTFOLIO", "⏳ TIME MACHINE", "🧬 OPTIMIZATION", "🌍 MACRO", "🔔 ALERTS", "🤖 AI"
 ])
 
 # TAB 1: PORTFOLIO OVERVIEW WITH SMARTQUANT
 with tab1:
-    st.subheader("� Portfolio Overview & Q-Score Scores")
+    st.subheader(" Portfolio Overview & Q-Score Scores")
     
     if not st.session_state.portfolio.empty:
         tickers = st.session_state.portfolio['Ticker'].unique().tolist()
@@ -1013,10 +1117,22 @@ with tab1:
                     p3.metric("Multifractal Spectrum (Δα)", f"{asset['mf_width']:.3f}", 
                              "High Complexity 🌀" if asset['mf_width'] > 0.3 else "Low Complexity 🧊")
                     
-                    # Q-Score Signals
-                    st.markdown("##### 🔍 Analysis Factors:")
+                    # Q-Score Signals with "White Box" Logic
+                    st.markdown("##### 🔍 AI Logic Analysis:")
                     for signal in asset['sq_signals']:
-                        st.markdown(f"- {signal}")
+                        col_s1, col_s2 = st.columns([0.8, 0.2])
+                        with col_s1:
+                            st.markdown(f"- {signal}")
+                        with col_s2:
+                            # Search for explanation in AI_KNOWLEDGE_BASE
+                            topic = "general"
+                            if "RSI" in signal: topic = "rsi"
+                            elif "SMA" in signal: topic = "sma"
+                            elif "P/E" in signal: topic = "pe"
+                            elif "margin" in signal: topic = "eps"
+                            
+                            if st.button("💡 Logic", key=f"logic_{asset['ticker']}_{signal}"):
+                                st.info(get_ai_response(topic))
                     
                     # Price Chart
                     st.markdown("##### 📉 Price Chart (90 Days)")
@@ -1131,7 +1247,78 @@ with tab1:
 
 
 
-# TAB 2: PORTFOLIO
+# TAB: PORTFOLIO TIME MACHINE
+with tab_tm:
+    st.subheader("⏳ Portfolio Time Machine (vs S&P 500)")
+    st.markdown("*" + "Simulation: What if you had invested 5 years ago?" + "*")
+    
+    if not st.session_state.portfolio.empty:
+        tickers = st.session_state.portfolio['Ticker'].unique().tolist()
+        
+        with st.spinner("🕵️ Traveling back in time..."):
+            # Download 5y data for portfolio + S&P 500
+            backtest_data = get_prices(tickers + ['^GSPC'], period="5y")
+            
+            if backtest_data is not None:
+                # Handle single asset case
+                if isinstance(backtest_data, pd.Series):
+                    backtest_data = backtest_data.to_frame(name=tickers[0])
+                
+                # Align data
+                backtest_data = backtest_data.dropna()
+                
+                if not backtest_data.empty:
+                    # Calculate Normalized Returns (Base 100)
+                    # Use Qty from current portfolio for weighting
+                    portfolio_value = pd.Series(0, index=backtest_data.index)
+                    for t in tickers:
+                        if t in backtest_data.columns:
+                            qty = st.session_state.portfolio[st.session_state.portfolio['Ticker'] == t]['Qty'].iloc[0]
+                            # Simple approach: assume fixed quantity bought 5 years ago
+                            portfolio_value += backtest_data[t] * qty
+                    
+                    # Benchmark
+                    benchmark = backtest_data['^GSPC']
+                    
+                    # Normalize to 100
+                    port_norm = (portfolio_value / portfolio_value.iloc[0]) * 100
+                    bench_norm = (benchmark / benchmark.iloc[0]) * 100
+                    
+                    # Stats
+                    port_ret_total = (port_norm.iloc[-1] - 100)
+                    bench_ret_total = (bench_norm.iloc[-1] - 100)
+                    alpha = port_ret_total - bench_ret_total
+                    
+                    # Display metrics
+                    c1, c2, c3 = st.columns(3)
+                    c1.metric("Portfolio Return (5Y)", f"{port_ret_total:+.1f}%")
+                    c2.metric("S&P 500 Return (5Y)", f"{bench_ret_total:+.1f}%")
+                    c3.metric("Alpha (Excess Return)", f"{alpha:+.1f}%", 
+                             delta="BEATING MARKET" if alpha > 0 else "UNDERPERFORMING",
+                             delta_color="normal" if alpha > 0 else "inverse")
+                    
+                    # Chart
+                    fig_tm = go.Figure()
+                    fig_tm.add_trace(go.Scatter(x=port_norm.index, y=port_norm, name="Your Portfolio", line=dict(color='#00f2ff', width=3)))
+                    fig_tm.add_trace(go.Scatter(x=bench_norm.index, y=bench_norm, name="S&P 500 Benchmark", line=dict(color='rgba(255,255,255,0.4)', width=2, dash='dot')))
+                    
+                    fig_tm.update_layout(
+                        title="Backtest: Growth of $100 Initial Investment",
+                        template="plotly_dark",
+                        height=500,
+                        hovermode='x unified',
+                        paper_bgcolor='rgba(0,0,0,0)',
+                        plot_bgcolor='rgba(26,31,58,0.5)'
+                    )
+                    st.plotly_chart(fig_tm, use_container_width=True)
+                    
+                    st.info("💡 **Educational Tip:** This simulation assumes you didn't change your allocation for 5 years. It helps you understand if your current strategy historically outperformed the broader market.")
+                else:
+                    st.warning("Insufficient overlapping historical data for this portfolio.")
+            else:
+                st.error("Could not fetch historical data for backtest.")
+    else:
+        st.info("Add assets to your portfolio to use the Time Machine.")
 with tab2:
     st.subheader("🧬 Quantum Optimization Studio")
     
@@ -1759,7 +1946,7 @@ with tab4:
                 })
                 
                 # SAVE TO FIRESTORE
-                auth_handler = auth.FirebaseAuth()
+                # auth_handler is available from top-level scope
                 auth_handler.save_user_alerts(st.session_state.user_id, st.session_state.alerts)
                 
                 st.success(f"✅ Alert created: {al_ticker} {al_type.lower()} ${al_price}")
@@ -1984,3 +2171,33 @@ with tab5:
         ---
         **Prova a chiedere qualcosa!** 👆
         """)
+
+# FOOTER & DISCLAIMER
+st.markdown("---")
+footer_col1, footer_col2 = st.columns([2, 1])
+
+with footer_col1:
+    st.markdown("""
+    ### ⚠️ Disclaimer & Risk Warning
+    **NOT FINANCIAL ADVICE.** All insights, scores (Q-Score), and signals provided by Quantum Terminal are generated by algorithms for educational and demonstration purposes only. 
+    Investing in financial markets involves high risk, including loss of principal. We do not provide human financial advisory services. 
+    Always consult with a certified professional before making any investment decisions.
+    """)
+
+with footer_col2:
+    st.markdown("""
+    ### 🤝 Partnership / Hiring
+    **Looking for a Co-Founder / CFO Partner.** 
+    Quantum Terminal is scaling. If you are a financial expert or a quantitative developer interested in validation or business development, 
+    let's connect.
+    
+    📧 [partner@quantumterminal.ai](mailto:partner@quantumterminal.ai)
+    """)
+
+st.markdown("""
+<div style="text-align: center; color: #555; padding: 20px; font-size: 0.8rem;">
+    © 2026 Quantum Terminal Pro. Designed for Gen Z Retail Investors. 🚀
+</div>
+""", unsafe_allow_html=True)
+
+# OAuth update trigger
