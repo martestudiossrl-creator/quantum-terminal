@@ -149,45 +149,75 @@ class FirebaseAuth:
                     return False, "❌ Username not found", None
                 email = users[0].to_dict()['email']
             
-            # Use Firebase REST API for sign in
-            url = f"https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key={self.api_key}"
-            payload = {
-                "email": email,
-                "password": password,
-                "returnSecureToken": True
-            }
-            
-            response = requests.post(url, json=payload)
-            
-            if response.status_code == 200:
-                data = response.json()
-                id_token = data.get('idToken')
+            # Check if user exists first
+            try:
                 user = auth.get_user_by_email(email)
+            except auth.UserNotFoundError:
+                return False, "❌ Email not found", None
+            
+            # Check email verification
+            if not user.email_verified:
+                return False, "⚠️ Please verify your email first. Check your inbox.", None
+            
+            # Try Firebase REST API for password verification
+            if not self.api_key:
+                # Provide Google OAuth option if API key missing
+                return False, "⚠️ Email/password login temporarily unavailable. Please use 'Sign in with Google' button above.", None
+            
+            try:
+                url = f"https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key={self.api_key}"
+                payload = {
+                    "email": email,
+                    "password": password,
+                    "returnSecureToken": True
+                }
                 
-                # Get user profile from Firestore
-                user_doc = self.db.collection('users').document(user.uid).get()
-                user_data = user_doc.to_dict()
-                user_data['uid'] = user.uid
-                user_data['email_verified'] = user.email_verified
+                response = requests.post(url, json=payload, timeout=10)
                 
-                if not user.email_verified:
-                    return False, "⚠️ Please verify your email first. Check your inbox.", None
-                
-                # Persist session if remember_me is True
-                if remember_me:
-                    self.set_token_cookie(id_token)
-                
-                return True, "✅ Login successful!", user_data
-            else:
-                error = response.json().get('error', {}).get('message', 'Unknown error')
-                if 'INVALID_PASSWORD' in error:
-                    return False, "❌ Invalid password", None
-                elif 'EMAIL_NOT_FOUND' in error:
-                    return False, "❌ Email not found", None
+                if response.status_code == 200:
+                    data = response.json()
+                    id_token = data.get('idToken')
+                    
+                    # Get user profile from Firestore
+                    user_doc = self.db.collection('users').document(user.uid).get()
+                    user_data = user_doc.to_dict()
+                    user_data['uid'] = user.uid
+                    user_data['email_verified'] = user.email_verified
+                    
+                    # Persist session if remember_me is True
+                    if remember_me and id_token:
+                        self.set_token_cookie(id_token)
+                    
+                    # Set session state
+                    st.session_state.authenticated = True
+                    st.session_state.user = user_data
+                    st.session_state.user_id = user_data['uid']
+                    st.session_state.username = user_data['username']
+                    
+                    return True, "✅ Login successful!", user_data
                 else:
-                    return False, f"❌ Login failed: {error}", None
+                    error_data = response.json().get('error', {})
+                    error_msg = error_data.get('message', 'Unknown error')
+                    
+                    if 'INVALID_PASSWORD' in error_msg:
+                        return False, "❌ Invalid password", None
+                    elif 'EMAIL_NOT_FOUND' in error_msg:
+                        return False, "❌ Email not found", None
+                    elif 'API key not valid' in error_msg or 'API_KEY_INVALID' in error_msg:
+                        self._log(f"API key validation failed: {error_msg}")
+                        return False, "⚠️ Email/password login temporarily unavailable. Please use 'Sign in with Google' button above.", None
+                    else:
+                        return False, f"❌ Login failed: {error_msg}", None
+                        
+            except requests.exceptions.RequestException as req_err:
+                self._log(f"Network error during login: {str(req_err)}")
+                return False, "❌ Network error. Please check your connection and try again.", None
+            except Exception as api_error:
+                self._log(f"API error: {str(api_error)}")
+                return False, "⚠️ Email/password login temporarily unavailable. Please use 'Sign in with Google' button above.", None
                 
         except Exception as e:
+            self._log(f"Unexpected error in sign_in_email_password: {str(e)}")
             return False, f"❌ Login error: {str(e)}", None
 
     def sign_in_with_token(self, token):
