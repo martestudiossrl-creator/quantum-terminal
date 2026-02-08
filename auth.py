@@ -469,56 +469,8 @@ def show_login_page(auth_handler):
             st.session_state.username = user_data['username']
             st.rerun()
 
-    # Google OAuth Login
-    st.markdown("---")
-    
-    # Show OAuth error if one occurred during callback
-    if st.session_state.get("_oauth_error"):
-        st.error(st.session_state._oauth_error)
-        del st.session_state._oauth_error
-    
-    import os
-    import requests
-    client_id = st.secrets.get("google_oauth_client_id", os.getenv("GOOGLE_OAUTH_CLIENT_ID", ""))
-    client_secret = st.secrets.get("google_oauth_client_secret", os.getenv("GOOGLE_OAUTH_CLIENT_SECRET", ""))
-    
-    
-    # OAuth callback is handled in app.py, not here
-    
-    if client_id:
-        # Build Google OAuth URL
-        redirect_uri = st.secrets.get("redirect_url", "http://localhost:8501")
-        scope = "openid email profile"
-        auth_url = f"https://accounts.google.com/o/oauth2/auth?client_id={client_id}&redirect_uri={redirect_uri}&scope={scope}&response_type=code&access_type=offline&prompt=select_account"
-        
-        # Show button with link
-        st.markdown(f"""
-        <a href="{auth_url}" target="_self">
-            <button style="
-                width: 100%;
-                padding: 12px;
-                background: white;
-                color: #444;
-                border: 1px solid #ddd;
-                border-radius: 4px;
-                font-size: 16px;
-                cursor: pointer;
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                gap: 10px;
-            ">
-                <img src="https://www.google.com/favicon.ico" width="20" height="20">
-                Sign in with Google
-            </button>
-        </a>
-        """, unsafe_allow_html=True)
-    else:
-        st.button("🔴 Sign in with Google", disabled=True, key="google_disabled", use_container_width=True)
-        st.caption("⚙️ Google OAuth not configured")
-    
-    st.markdown("---")
 
+    # Email/Password Login Forms
     col1, col2, col3 = st.columns([1, 4, 1])
     
     with col2:
