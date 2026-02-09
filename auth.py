@@ -285,8 +285,10 @@ class FirebaseAuth:
             
             # 1. Verify Google ID Token locally/via Google Certs (Doesn't need Firebase API Key)
             self._log("Verifying Google ID Token via google-auth library...")
+            # Add clock skew tolerance to handle slight time differences
             id_info = google_id_token_verifier.verify_oauth2_token(
-                google_token, google_requests.Request(), client_id
+                google_token, google_requests.Request(), client_id,
+                clock_skew_in_seconds=10  # Allow 10 seconds clock skew
             )
             
             if not id_info:
