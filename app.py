@@ -78,15 +78,27 @@ if "code" in query_params:
                     _oauth_log(f"Got id_token: {bool(id_token)}")
                     
                     if id_token:
-                        # Sign in with Firebase
+                        # Sign in with Firebase using official REST API
                         _oauth_log("Calling sign_in_with_google...")
-                        # NOTE: auth_handler.sign_in_with_google now sets session state internally
-                        # before setting the cookie to handle potential reruns gracefully.
-                        success, message, user_data = auth_handler.sign_in_with_google(id_token)
+                        # NOTE: Function returns 4 values now (success, message, user_data, firebase_token)
+                        # Session state is NOT set inside auth module to avoid rerun issues
+                        success, message, user_data, firebase_token = auth_handler.sign_in_with_google(id_token)
                         _oauth_log(f"Firebase result: success={success}, message={message}")
                         
                         if success:
                             _oauth_log(f"SUCCESS! User: {user_data.get('username') if user_data else 'Unknown'}")
+                            
+                            # Set session state AFTER function returns (critical for avoiding rerun issues)
+                            st.session_state.authenticated = True
+                            st.session_state.user = user_data
+                            st.session_state.user_id = user_data['uid']
+                            st.session_state.username = user_data['username']
+                            
+                            # Set persistent cookie with Firebase token
+                            if firebase_token:
+                                auth_handler.set_token_cookie(firebase_token)
+                            
+                            _oauth_log("Session state set, triggering rerun to dashboard")
                             st.rerun()
                         else:
                             st.session_state._oauth_error = f"🔴 Google Sign-In failed: {message}"

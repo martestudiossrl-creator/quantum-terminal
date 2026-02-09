@@ -276,100 +276,78 @@ class FirebaseAuth:
     
     def sign_in_with_google(self, google_token):
         """
-        Sign in with Google ID Token. 
-        Bypasses the Firebase REST API if the API key is invalid by verifying 
-        the Google Token directly and using Firebase Admin SDK.
+        Sign in with Google using Firebase REST API signInWithIdp endpoint.
+        Official documentation: https://firebase.google.com/docs/reference/rest/auth#section-verify-assertion
+        
+        Returns: (success: bool, message: str, user_data: dict, firebase_token: str)
         """
         try:
-            client_id = st.secrets.get("google_oauth_client_id", "")
+            # Use Firebase REST API signInWithIdp endpoint (official method)
+            self._log("Calling Firebase signInWithIdp API...")
+            url = f"https://identitytoolkit.googleapis.com/v1/accounts:signInWithIdp?key={self.api_key}"
+            redirect_uri = st.secrets.get("redirect_url", "http://localhost:8501")
             
-            # 1. Verify Google ID Token locally/via Google Certs (Doesn't need Firebase API Key)
-            self._log("Verifying Google ID Token via google-auth library...")
-            # Add clock skew tolerance to handle slight time differences
-            id_info = google_id_token_verifier.verify_oauth2_token(
-                google_token, google_requests.Request(), client_id,
-                clock_skew_in_seconds=10  # Allow 10 seconds clock skew
-            )
+            payload = {
+                "postBody": f"id_token={google_token}&providerId=google.com",
+                "requestUri": redirect_uri,
+                "returnSecureToken": True
+            }
             
-            if not id_info:
-                return False, "❌ Google token verification failed", None
+            response = requests.post(url, json=payload)
+            self._log(f"signInWithIdp response status: {response.status_code}")
             
-            email = id_info.get('email')
-            display_name = id_info.get('name', email.split('@')[0])
-            self._log(f"Google Token Verified for {email}")
-            
-            # 2. Get or create user in Firebase via Admin SDK (Doesn't need API Key)
-            try:
-                user = auth.get_user_by_email(email)
-                self._log(f"Found existing Firebase user: {user.uid}")
-            except auth.UserNotFoundError:
-                self._log(f"Creating new Firebase user for {email}")
-                user = auth.create_user(
-                    email=email,
-                    display_name=display_name,
-                    email_verified=True
-                )
-            
-            # 3. Get or create Firestore profile
-            user_doc = self.db.collection('users').document(user.uid).get()
-            
-            if not user_doc.exists:
-                username = display_name.replace(' ', '_').lower()
-                self.db.collection('users').document(user.uid).set({
-                    'username': username,
-                    'email': email,
-                    'created_at': datetime.now(),
-                    'email_verified': True,
-                    'portfolio': [],
-                    'alerts': [],
-                    'auth_provider': 'google'
-                })
-                user_data = {
-                    'uid': user.uid,
-                    'username': username,
-                    'email': email,
-                    'email_verified': True
-                }
-            else:
-                user_data = user_doc.to_dict()
-                user_data['uid'] = user.uid
-                user_data['email_verified'] = True
-            
-            # 4. Set session state
-            st.session_state.authenticated = True
-            st.session_state.user = user_data
-            st.session_state.user_id = user_data['uid']
-            st.session_state.username = user_data['username']
-            
-            # 5. Handle Persistent Cookie
-            # Note: We can't get a Firebase ID Token without a valid API Key.
-            # We'll use the Google ID Token as a session token if possible,
-            # but for simplicity, we'll just set a placeholder or use the custom token if we really need persistence.
-            # For now, we'll use the google_token as the session identifier.
-            
-            # We try to get a Firebase ID Token JUST IN CASE the key actually works for this 
-            # (sometimes identitytoolkit works while createAuthUri fails)
-            firebase_token = None
-            try:
-                url = f"https://identitytoolkit.googleapis.com/v1/accounts:signInWithIdp?key={self.api_key}"
-                redirect_uri = st.secrets.get("redirect_url", "http://localhost:8501")
-                payload = {
-                    "postBody": f"id_token={google_token}&providerId=google.com",
-                    "requestUri": redirect_uri,
-                    "returnSecureToken": True
-                }
-                fb_res = requests.post(url, json=payload)
-                if fb_res.status_code == 200:
-                    firebase_token = fb_res.json().get('idToken')
-            except:
-                pass
+            if response.status_code == 200:
+                data = response.json()
                 
-            if firebase_token:
-                self.set_token_cookie(firebase_token)
+                # Extract user info from Firebase response
+                uid = data['localId']
+                email = data['email']
+                display_name = data.get('displayName', email.split('@')[0])
+                firebase_token = data['idToken']
+                
+                self._log(f"Firebase auth successful for {email}, UID: {uid}")
+                
+                # Get or create Firestore profile
+                user_doc = self.db.collection('users').document(uid).get()
+                
+                if not user_doc.exists:
+                    username = display_name.replace(' ', '_').lower()
+                    self._log(f"Creating new Firestore profile: {username}")
+                    self.db.collection('users').document(uid).set({
+                        'username': username,
+                        'email': email,
+                        'created_at': datetime.now(),
+                        'email_verified': True,
+                        'portfolio': [],
+                        'alerts': [],
+                        'auth_provider': 'google'
+                    })
+                    user_data = {
+                        'uid': uid,
+                        'username': username,
+                        'email': email,
+                        'email_verified': True
+                    }
+                else:
+                    self._log("Loading existing Firestore profile")
+                    user_data = user_doc.to_dict()
+                    user_data['uid'] = uid
+                    user_data['email_verified'] = True
+                
+                self._log(f"RETURNING SUCCESS - User: {user_data.get('username')}")
+                # CRITICAL: DO NOT set session state here - let app.py handle it
+                # This avoids Streamlit rerun issues during OAuth callback
+                return True, "✅ Google Sign-In successful!", user_data, firebase_token
+                
             else:
-                self._log("Firebase persistent token couldn't be generated (API key issue). Using session only.")
-            
-            return True, "✅ Google Sign-In successful!", user_data
+                error_data = response.json().get('error', {})
+                error_msg = error_data.get('message', 'Unknown error')
+                self._log(f"signInWithIdp failed: {error_msg}")
+                return False, f"❌ Firebase error: {error_msg}", None, None
+                
+        except Exception as e:
+            self._log(f"sign_in_with_google EXCEPTION: {str(e)}")
+            return False, f"❌ Google Sign-In error: {str(e)}", None, None
                 
         except Exception as e:
             self._log(f"sign_in_with_google EXCEPTION: {str(e)}")
@@ -458,37 +436,38 @@ def show_login_page(auth_handler):
     
     # OAuth callback is handled in app.py, not here
     
-    if client_id:
-        # Build Google OAuth URL
-        redirect_uri = st.secrets.get("redirect_url", "http://localhost:8501")
-        scope = "openid email profile"
-        auth_url = f"https://accounts.google.com/o/oauth2/auth?client_id={client_id}&redirect_uri={redirect_uri}&scope={scope}&response_type=code&access_type=offline&prompt=select_account"
-        
-        # Show button with link
-        st.markdown(f"""
-        <a href="{auth_url}" target="_self">
-            <button style="
-                width: 100%;
-                padding: 12px;
-                background: white;
-                color: #444;
-                border: 1px solid #ddd;
-                border-radius: 4px;
-                font-size: 16px;
-                cursor: pointer;
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                gap: 10px;
-            ">
-                <img src="https://www.google.com/favicon.ico" width="20" height="20">
-                Sign in with Google
-            </button>
-        </a>
-        """, unsafe_allow_html=True)
-    else:
-        st.button("🔴 Sign in with Google", disabled=True, key="google_disabled", use_container_width=True)
-        st.caption("⚙️ Google OAuth not configured")
+    # GOOGLE SIGN-IN DISABLED - Not working properly
+    # if client_id:
+    #     # Build Google OAuth URL
+    #     redirect_uri = st.secrets.get("redirect_url", "http://localhost:8501")
+    #     scope = "openid email profile"
+    #     auth_url = f"https://accounts.google.com/o/oauth2/auth?client_id={client_id}&redirect_uri={redirect_uri}&scope={scope}&response_type=code&access_type=offline&prompt=select_account"
+    #     
+    #     # Show button with link
+    #     st.markdown(f"""
+    #     <a href="{auth_url}" target="_self">
+    #         <button style="
+    #             width: 100%;
+    #             padding: 12px;
+    #             background: white;
+    #             color: #444;
+    #             border: 1px solid #ddd;
+    #             border-radius: 4px;
+    #             font-size: 16px;
+    #             cursor: pointer;
+    #             display: flex;
+    #             align-items: center;
+    #             justify-content: center;
+    #             gap: 10px;
+    #         ">
+    #             <img src="https://www.google.com/favicon.ico" width="20" height="20">
+    #             Sign in with Google
+    #         </button>
+    #     </a>
+    #     """, unsafe_allow_html=True)
+    # else:
+    #     st.button("🔴 Sign in with Google", disabled=True, key="google_disabled", use_container_width=True)
+    #     st.caption("⚙️ Google OAuth not configured")
     
     st.markdown("---")
 
