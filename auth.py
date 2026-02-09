@@ -7,7 +7,7 @@ import streamlit as st
 import firebase_admin
 from firebase_admin import credentials, auth, firestore
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 import requests
 import extra_streamlit_components as stx
 from google.oauth2 import id_token as google_id_token_verifier
@@ -63,13 +63,14 @@ class FirebaseAuth:
 
     def set_token_cookie(self, token, expires_at=30):
         """Set auth token in cookies (default 30 days)"""
-        self.cookie_manager.set("quantum_auth_token", token, expires_at=datetime.now().timestamp() + (expires_at * 24 * 60 * 60))
+        expiry = datetime.now() + timedelta(days=expires_at)
+        self.cookie_manager.set("quantum_auth_token", token, expires_at=expiry)
 
     def delete_token_cookie(self):
         """Remove auth token from cookies"""
         try:
             # Set to empty with immediate expiration (more reliable than delete)
-            self.cookie_manager.set("quantum_auth_token", "", expires_at=datetime.now().timestamp())
+            self.cookie_manager.set("quantum_auth_token", "", expires_at=datetime.now())
         except:
             pass
         try:
@@ -149,75 +150,45 @@ class FirebaseAuth:
                     return False, "❌ Username not found", None
                 email = users[0].to_dict()['email']
             
-            # Check if user exists first
-            try:
+            # Use Firebase REST API for sign in
+            url = f"https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key={self.api_key}"
+            payload = {
+                "email": email,
+                "password": password,
+                "returnSecureToken": True
+            }
+            
+            response = requests.post(url, json=payload)
+            
+            if response.status_code == 200:
+                data = response.json()
+                id_token = data.get('idToken')
                 user = auth.get_user_by_email(email)
-            except auth.UserNotFoundError:
-                return False, "❌ Email not found", None
-            
-            # Check email verification
-            if not user.email_verified:
-                return False, "⚠️ Please verify your email first. Check your inbox.", None
-            
-            # Try Firebase REST API for password verification
-            if not self.api_key:
-                # Provide Google OAuth option if API key missing
-                return False, "⚠️ Email/password login temporarily unavailable. Please use 'Sign in with Google' button above.", None
-            
-            try:
-                url = f"https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key={self.api_key}"
-                payload = {
-                    "email": email,
-                    "password": password,
-                    "returnSecureToken": True
-                }
                 
-                response = requests.post(url, json=payload, timeout=10)
+                # Get user profile from Firestore
+                user_doc = self.db.collection('users').document(user.uid).get()
+                user_data = user_doc.to_dict()
+                user_data['uid'] = user.uid
+                user_data['email_verified'] = user.email_verified
                 
-                if response.status_code == 200:
-                    data = response.json()
-                    id_token = data.get('idToken')
-                    
-                    # Get user profile from Firestore
-                    user_doc = self.db.collection('users').document(user.uid).get()
-                    user_data = user_doc.to_dict()
-                    user_data['uid'] = user.uid
-                    user_data['email_verified'] = user.email_verified
-                    
-                    # Persist session if remember_me is True
-                    if remember_me and id_token:
-                        self.set_token_cookie(id_token)
-                    
-                    # Set session state
-                    st.session_state.authenticated = True
-                    st.session_state.user = user_data
-                    st.session_state.user_id = user_data['uid']
-                    st.session_state.username = user_data['username']
-                    
-                    return True, "✅ Login successful!", user_data
+                if not user.email_verified:
+                    return False, "⚠️ Please verify your email first. Check your inbox.", None
+                
+                # Persist session if remember_me is True
+                if remember_me:
+                    self.set_token_cookie(id_token)
+                
+                return True, "✅ Login successful!", user_data
+            else:
+                error = response.json().get('error', {}).get('message', 'Unknown error')
+                if 'INVALID_PASSWORD' in error:
+                    return False, "❌ Invalid password", None
+                elif 'EMAIL_NOT_FOUND' in error:
+                    return False, "❌ Email not found", None
                 else:
-                    error_data = response.json().get('error', {})
-                    error_msg = error_data.get('message', 'Unknown error')
-                    
-                    if 'INVALID_PASSWORD' in error_msg:
-                        return False, "❌ Invalid password", None
-                    elif 'EMAIL_NOT_FOUND' in error_msg:
-                        return False, "❌ Email not found", None
-                    elif 'API key not valid' in error_msg or 'API_KEY_INVALID' in error_msg:
-                        self._log(f"API key validation failed: {error_msg}")
-                        return False, "⚠️ Email/password login temporarily unavailable. Please use 'Sign in with Google' button above.", None
-                    else:
-                        return False, f"❌ Login failed: {error_msg}", None
-                        
-            except requests.exceptions.RequestException as req_err:
-                self._log(f"Network error during login: {str(req_err)}")
-                return False, "❌ Network error. Please check your connection and try again.", None
-            except Exception as api_error:
-                self._log(f"API error: {str(api_error)}")
-                return False, "⚠️ Email/password login temporarily unavailable. Please use 'Sign in with Google' button above.", None
+                    return False, f"❌ Login failed: {error}", None
                 
         except Exception as e:
-            self._log(f"Unexpected error in sign_in_email_password: {str(e)}")
             return False, f"❌ Login error: {str(e)}", None
 
     def sign_in_with_token(self, token):
@@ -469,8 +440,56 @@ def show_login_page(auth_handler):
             st.session_state.username = user_data['username']
             st.rerun()
 
+    # Google OAuth Login
+    st.markdown("---")
+    
+    # Show OAuth error if one occurred during callback
+    if st.session_state.get("_oauth_error"):
+        st.error(st.session_state._oauth_error)
+        del st.session_state._oauth_error
+    
+    import os
+    import requests
+    client_id = st.secrets.get("google_oauth_client_id", os.getenv("GOOGLE_OAUTH_CLIENT_ID", ""))
+    client_secret = st.secrets.get("google_oauth_client_secret", os.getenv("GOOGLE_OAUTH_CLIENT_SECRET", ""))
+    
+    
+    # OAuth callback is handled in app.py, not here
+    
+    if client_id:
+        # Build Google OAuth URL
+        redirect_uri = st.secrets.get("redirect_url", "http://localhost:8501")
+        scope = "openid email profile"
+        auth_url = f"https://accounts.google.com/o/oauth2/auth?client_id={client_id}&redirect_uri={redirect_uri}&scope={scope}&response_type=code&access_type=offline&prompt=select_account"
+        
+        # Show button with link
+        st.markdown(f"""
+        <a href="{auth_url}" target="_self">
+            <button style="
+                width: 100%;
+                padding: 12px;
+                background: white;
+                color: #444;
+                border: 1px solid #ddd;
+                border-radius: 4px;
+                font-size: 16px;
+                cursor: pointer;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                gap: 10px;
+            ">
+                <img src="https://www.google.com/favicon.ico" width="20" height="20">
+                Sign in with Google
+            </button>
+        </a>
+        """, unsafe_allow_html=True)
+    else:
+        st.button("🔴 Sign in with Google", disabled=True, key="google_disabled", use_container_width=True)
+        st.caption("⚙️ Google OAuth not configured")
+    
+    st.markdown("---")
 
-    # Email/Password Login Forms
     col1, col2, col3 = st.columns([1, 4, 1])
     
     with col2:
