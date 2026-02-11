@@ -1,0 +1,715 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Quantum Terminal V11 PRO - Next-Gen Financial Analysis Platform</title>
+    <meta name="description"
+        content="Experience the future of financial analysis with Quantum Terminal V11 PRO. Advanced portfolio management, AI insights, and real-time market data.">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700;800&display=swap" rel="stylesheet">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        :root {
+            --primary-cyan: #00f2ff;
+            --primary-purple: #7b2ff7;
+            --dark-bg: #0a0e27;
+            --card-bg: rgba(10, 14, 39, 0.8);
+            --text-primary: #ffffff;
+            --text-secondary: #9aa0a6;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background: linear-gradient(135deg, #0a0e27 0%, #1a1f3a 100%);
+            color: var(--text-primary);
+            line-height: 1.6;
+            overflow-x: hidden;
+        }
+
+        /* Animated Background */
+        .bg-animation {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: -1;
+            opacity: 0.3;
+        }
+
+        .bg-animation::before,
+        .bg-animation::after {
+            content: '';
+            position: absolute;
+            width: 500px;
+            height: 500px;
+            border-radius: 50%;
+            filter: blur(100px);
+            animation: float 20s ease-in-out infinite;
+        }
+
+        .bg-animation::before {
+            background: var(--primary-cyan);
+            top: -200px;
+            left: -200px;
+            animation-delay: 0s;
+        }
+
+        .bg-animation::after {
+            background: var(--primary-purple);
+            bottom: -200px;
+            right: -200px;
+            animation-delay: 10s;
+        }
+
+        @keyframes float {
+
+            0%,
+            100% {
+                transform: translate(0, 0);
+            }
+
+            50% {
+                transform: translate(100px, 100px);
+            }
+        }
+
+        /* Header */
+        header {
+            position: fixed;
+            top: 0;
+            width: 100%;
+            padding: 20px 5%;
+            background: rgba(10, 14, 39, 0.8);
+            backdrop-filter: blur(20px);
+            border-bottom: 1px solid rgba(0, 242, 255, 0.1);
+            z-index: 1000;
+        }
+
+        nav {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        .logo {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            font-size: 1.5rem;
+            font-weight: 800;
+        }
+
+        .logo-icon {
+            width: 50px;
+            height: 50px;
+            transition: transform 0.3s;
+        }
+
+        .logo:hover .logo-icon {
+            transform: scale(1.1);
+        }
+
+        .logo-text {
+            background: linear-gradient(90deg, var(--primary-cyan) 0%, var(--primary-purple) 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .nav-btn {
+            padding: 12px 30px;
+            background: linear-gradient(135deg, var(--primary-cyan) 0%, var(--primary-purple) 100%);
+            border: none;
+            border-radius: 8px;
+            color: white;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.3s, box-shadow 0.3s;
+            text-decoration: none;
+            display: inline-block;
+        }
+
+        .nav-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 30px rgba(0, 242, 255, 0.3);
+        }
+
+        /* Hero Section */
+        .hero {
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+            padding: 100px 5% 50px;
+        }
+
+        .hero-content {
+            max-width: 900px;
+        }
+
+        .hero-logo {
+            width: 250px;
+            height: 250px;
+            margin: 0 auto 40px;
+            filter: drop-shadow(0 0 30px rgba(0, 242, 255, 0.3));
+        }
+
+        h1 {
+            font-size: 4rem;
+            font-weight: 800;
+            margin-bottom: 20px;
+            background: linear-gradient(90deg, var(--primary-cyan) 0%, var(--primary-purple) 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            line-height: 1.2;
+        }
+
+        .hero p {
+            font-size: 1.3rem;
+            color: var(--text-secondary);
+            margin-bottom: 40px;
+        }
+
+        .cta-buttons {
+            display: flex;
+            gap: 20px;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+
+        .btn-primary {
+            padding: 18px 40px;
+            background: linear-gradient(135deg, var(--primary-cyan) 0%, var(--primary-purple) 100%);
+            border: none;
+            border-radius: 12px;
+            color: white;
+            font-size: 1.1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+            text-decoration: none;
+            display: inline-block;
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 15px 40px rgba(0, 242, 255, 0.4);
+        }
+
+        .btn-secondary {
+            padding: 18px 40px;
+            background: transparent;
+            border: 2px solid var(--primary-cyan);
+            border-radius: 12px;
+            color: var(--primary-cyan);
+            font-size: 1.1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+            text-decoration: none;
+            display: inline-block;
+        }
+
+        .btn-secondary:hover {
+            background: rgba(0, 242, 255, 0.1);
+            transform: translateY(-3px);
+        }
+
+        /* Beta Badge */
+        .beta-badge {
+            display: inline-block;
+            background: linear-gradient(135deg, #ff6b35 0%, #f7931e 100%);
+            color: white;
+            padding: 8px 20px;
+            border-radius: 20px;
+            font-size: 0.9rem;
+            font-weight: 700;
+            margin-bottom: 20px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        /* Modal */
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 2000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.8);
+            backdrop-filter: blur(10px);
+        }
+
+        .modal.active {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .modal-content {
+            background: var(--card-bg);
+            border: 2px solid var(--primary-cyan);
+            border-radius: 20px;
+            padding: 50px;
+            max-width: 600px;
+            width: 90%;
+            position: relative;
+            box-shadow: 0 30px 60px rgba(0, 242, 255, 0.3);
+        }
+
+        .close-modal {
+            position: absolute;
+            top: 20px;
+            right: 30px;
+            font-size: 2rem;
+            color: var(--text-secondary);
+            cursor: pointer;
+            transition: color 0.3s;
+        }
+
+        .close-modal:hover {
+            color: var(--primary-cyan);
+        }
+
+        .modal h2 {
+            font-size: 2rem;
+            margin-bottom: 20px;
+            background: linear-gradient(90deg, var(--primary-cyan) 0%, var(--primary-purple) 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .modal p {
+            color: var(--text-secondary);
+            margin-bottom: 30px;
+            line-height: 1.8;
+        }
+
+        .form-group {
+            margin-bottom: 25px;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 10px;
+            color: var(--text-primary);
+            font-weight: 600;
+        }
+
+        .form-group input,
+        .form-group textarea {
+            width: 100%;
+            padding: 15px;
+            background: rgba(10, 14, 39, 0.6);
+            border: 1px solid rgba(0, 242, 255, 0.3);
+            border-radius: 8px;
+            color: var(--text-primary);
+            font-family: 'Inter', sans-serif;
+            font-size: 1rem;
+            transition: border-color 0.3s;
+        }
+
+        .form-group input:focus,
+        .form-group textarea:focus {
+            outline: none;
+            border-color: var(--primary-cyan);
+        }
+
+        .form-group textarea {
+            resize: vertical;
+            min-height: 100px;
+        }
+
+        .submit-btn {
+            width: 100%;
+            padding: 18px;
+            background: linear-gradient(135deg, var(--primary-cyan) 0%, var(--primary-purple) 100%);
+            border: none;
+            border-radius: 12px;
+            color: white;
+            font-size: 1.1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .submit-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 15px 40px rgba(0, 242, 255, 0.4);
+        }
+
+        /* Disclaimer */
+        .disclaimer {
+            background: rgba(255, 107, 53, 0.1);
+            border: 2px solid #ff6b35;
+            border-radius: 15px;
+            padding: 30px;
+            margin: 60px auto;
+            max-width: 1200px;
+        }
+
+        .disclaimer h3 {
+            color: #ff6b35;
+            font-size: 1.8rem;
+            margin-bottom: 15px;
+            text-transform: uppercase;
+            font-weight: 800;
+        }
+
+        .disclaimer p {
+            color: var(--text-primary);
+            font-size: 1.1rem;
+            line-height: 1.8;
+        }
+
+        /* Features Section */
+        .features {
+            padding: 100px 5%;
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        .section-title {
+            text-align: center;
+            font-size: 3rem;
+            font-weight: 800;
+            margin-bottom: 60px;
+            background: linear-gradient(90deg, var(--primary-cyan) 0%, var(--primary-purple) 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .features-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 30px;
+        }
+
+        .feature-card {
+            background: var(--card-bg);
+            border: 1px solid rgba(0, 242, 255, 0.2);
+            border-radius: 20px;
+            padding: 40px;
+            backdrop-filter: blur(10px);
+            transition: all 0.3s;
+        }
+
+        .feature-card:hover {
+            transform: translateY(-10px);
+            border-color: var(--primary-cyan);
+            box-shadow: 0 20px 50px rgba(0, 242, 255, 0.2);
+        }
+
+        .feature-icon {
+            font-size: 3rem;
+            margin-bottom: 20px;
+        }
+
+        .feature-card h3 {
+            font-size: 1.5rem;
+            margin-bottom: 15px;
+            color: var(--text-primary);
+        }
+
+        .feature-card p {
+            color: var(--text-secondary);
+            line-height: 1.8;
+        }
+
+        /* Stats Section */
+        .stats {
+            padding: 80px 5%;
+            background: rgba(0, 242, 255, 0.05);
+            backdrop-filter: blur(10px);
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 40px;
+            max-width: 1200px;
+            margin: 0 auto;
+            text-align: center;
+        }
+
+        .stat-item h2 {
+            font-size: 3rem;
+            background: linear-gradient(90deg, var(--primary-cyan) 0%, var(--primary-purple) 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            margin-bottom: 10px;
+        }
+
+        .stat-item p {
+            color: var(--text-secondary);
+            font-size: 1.1rem;
+        }
+
+        /* Footer */
+        footer {
+            padding: 60px 5% 30px;
+            border-top: 1px solid rgba(0, 242, 255, 0.1);
+            text-align: center;
+        }
+
+        footer p {
+            color: var(--text-secondary);
+            margin-bottom: 20px;
+        }
+
+        .footer-links {
+            display: flex;
+            gap: 30px;
+            justify-content: center;
+            flex-wrap: wrap;
+            margin-bottom: 30px;
+        }
+
+        .footer-links a {
+            color: var(--text-secondary);
+            text-decoration: none;
+            transition: color 0.3s;
+        }
+
+        .footer-links a:hover {
+            color: var(--primary-cyan);
+        }
+
+        /* Mobile Responsive */
+        @media (max-width: 768px) {
+            h1 {
+                font-size: 2.5rem;
+            }
+
+            .hero p {
+                font-size: 1.1rem;
+            }
+
+            .section-title {
+                font-size: 2rem;
+            }
+
+            .cta-buttons {
+                flex-direction: column;
+                align-items: stretch;
+            }
+
+            .features-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .stats-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <div class="bg-animation"></div>
+
+    <header>
+        <nav>
+            <div class="logo">
+                <img src="logo.svg" alt="Quantum Logo" class="logo-icon">
+                <span class="logo-text">QUANTUM</span>
+            </div>
+            <button class="nav-btn" onclick="openModal()">Request Access</button>
+        </nav>
+    </header>
+
+    <section class="hero">
+        <div class="hero-content">
+            <span class="beta-badge">🚀 Early Access Beta</span>
+            <img src="logo.svg" alt="Quantum Terminal" class="hero-logo">
+            <h1>Next-Gen Financial Terminal</h1>
+            <p>Advanced portfolio analysis powered by econophysics and quantum finance algorithms.<br>
+                <strong>Currently in beta - Authorization required for access</strong>
+            </p>
+            <div class="cta-buttons">
+                <button class="btn-primary" onclick="openModal()">Request Beta Access</button>
+                <a href="#features" class="btn-secondary">Explore Features</a>
+            </div>
+        </div>
+    </section>
+
+    <section class="stats">
+        <div class="stats-grid">
+            <div class="stat-item">
+                <h2>10K+</h2>
+                <p>Global Assets</p>
+            </div>
+            <div class="stat-item">
+                <h2>Real-Time</h2>
+                <p>Market Data</p>
+            </div>
+            <div class="stat-item">
+                <h2>AI-Powered</h2>
+                <p>Insights</p>
+            </div>
+            <div class="stat-item">
+                <h2>24/7</h2>
+                <p>Access</p>
+            </div>
+        </div>
+    </section>
+
+    <section class="features" id="features">
+        <h2 class="section-title">Powerful Features</h2>
+        <div class="features-grid">
+            <div class="feature-card">
+                <div class="feature-icon">📊</div>
+                <h3>Advanced Analytics</h3>
+                <p>Deep market analysis powered by cutting-edge algorithms. Track correlations, volatility, and trends
+                    with precision.</p>
+            </div>
+
+            <div class="feature-card">
+                <div class="feature-icon">🤖</div>
+                <h3>AI Assistant</h3>
+                <p>Get intelligent insights and recommendations powered by advanced AI. Make informed decisions faster.
+                </p>
+            </div>
+
+            <div class="feature-card">
+                <div class="feature-icon">💼</div>
+                <h3>Portfolio Management</h3>
+                <p>Build and manage your portfolio with real-time tracking, performance metrics, and risk analysis.</p>
+            </div>
+
+            <div class="feature-card">
+                <div class="feature-icon">🔔</div>
+                <h3>Smart Alerts</h3>
+                <p>Never miss a market opportunity. Set custom alerts for price movements, news, and technical
+                    indicators.</p>
+            </div>
+
+            <div class="feature-card">
+                <div class="feature-icon">📈</div>
+                <h3>Real-Time Data</h3>
+                <p>Access global market data updated in real-time. Stocks, crypto, commodities, forex, and more.</p>
+            </div>
+
+            <div class="feature-card">
+                <div class="feature-icon">🔒</div>
+                <h3>Secure & Private</h3>
+                <p>Your data is protected with enterprise-grade security. Firebase authentication and encrypted storage.
+                </p>
+            </div>
+        </div>
+    </section>
+
+    <!-- Legal Disclaimer -->
+    <div class="disclaimer">
+        <h3>⚠️ Important Legal Notice</h3>
+        <p>
+            <strong>Quantum Terminal is NOT a financial advisor or investment consultant.</strong> This platform
+            provides
+            analytical tools based on econophysics and quantum finance algorithms for educational and research purposes
+            only.
+            All analysis, metrics, and recommendations are generated by mathematical models and should not be considered
+            as
+            financial advice. Users are solely responsible for their investment decisions. Past performance does not
+            guarantee
+            future results. Always consult with a qualified financial advisor before making investment decisions.
+        </p>
+    </div>
+
+    <section class="hero">
+        <div class="hero-content">
+            <h1>Ready to Start?</h1>
+            <p>Request access to experience the future of quantitative analysis</p>
+            <div class="cta-buttons">
+                <button class="btn-primary" onclick="openModal()">Request Beta Access</button>
+            </div>
+        </div>
+    </section>
+
+    <!-- Access Request Modal -->
+    <div id="accessModal" class="modal">
+        <div class="modal-content">
+            <span class="close-modal" onclick="closeModal()">&times;</span>
+            <h2>🚀 Test Quantum Terminal</h2>
+            <p style="font-size: 1.2rem; line-height: 1.8; margin-bottom: 30px;">
+                Quantum Terminal is currently in early access testing phase.
+            </p>
+            <div
+                style="background: rgba(0, 242, 255, 0.1); border-left: 4px solid var(--primary-cyan); padding: 25px; border-radius: 10px; margin-bottom: 20px;">
+                <p style="font-size: 1.1rem; margin-bottom: 15px;">
+                    📧 <strong>To test our algorithm, please send an email to:</strong>
+                </p>
+                <p style="font-size: 1.3rem; color: var(--primary-cyan); font-weight: 700; margin: 0;">
+                    <a href="mailto:g.brancato@martestudios.com"
+                        style="color: var(--primary-cyan); text-decoration: none;">
+                        g.brancato@martestudios.com
+                    </a>
+                </p>
+            </div>
+            <p style="color: var(--text-secondary); font-size: 0.95rem;">
+                Include your name, company (if applicable), and why you're interested in testing Quantum Terminal.
+                We'll get back to you with access credentials.
+            </p>
+        </div>
+    </div>
+
+    <footer>
+        <div class="footer-links">
+            <a href="#" onclick="openModal(); return false;">Request Access</a>
+            <a href="#features">Features</a>
+            <a href="terms-of-service.html">Terms of Service</a>
+            <a href="privacy-policy.html">Privacy Policy</a>
+            <a href="mailto:g.brancato@martestudios.com">Contact</a>
+        </div>
+        <p>&copy; 2025 Quantum Terminal V11 PRO by <a href="https://www.martestudios.com"
+                style="color: var(--primary-cyan); text-decoration: none;">Marte Studios S.r.l.</a> All rights reserved.
+        </p>
+        <p style="font-size: 0.85rem; color: var(--text-secondary); margin-top: 10px;">P.IVA: IT06999540823 | PEC:
+            martestudios@pec.com</p>
+    </footer>
+
+
+    <script>
+        function openModal() {
+            document.getElementById('accessModal').classList.add('active');
+        }
+
+        function closeModal() {
+            document.getElementById('accessModal').classList.remove('active');
+        }
+
+        // Close modal when clicking outside
+        window.onclick = function (event) {
+            const modal = document.getElementById('accessModal');
+            if (event.target === modal) {
+                closeModal();
+            }
+        }
+
+        // Close modal with Escape key
+        document.addEventListener('keydown', function (event) {
+            if (event.key === 'Escape') {
+                closeModal();
+            }
+        });
+    </script>
+</body>
+
+</html>
